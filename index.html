@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>孟村八极 两仪桩姿态矫正</title>
+<link rel="manifest" href="manifest.webmanifest">
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{background:#111;color:#fff;display:flex;flex-direction:column;align-items:center;min-height:100vh;}
+canvas{max-width:100vw;height:auto;}
+#tip{font-size:18px;padding:12px;color:#ff4444;text-align:center;min-height:60px;line-height:1.5;}
+</style>
+</head>
+<body>
+<div id="tip">等待摄像头加载...</div>
+<video id="video" autoplay playsinline style="display:none"></video>
+<canvas id="canvas"></canvas>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const video = document.getElementById('video');
+const tipBox = document.getElementById('tip');
+let lastTipText = "";
+const synth = window.speechSynthesis;
+
+navigator.mediaDevices.getUserMedia({
+    video:{facingMode:"environment", width:{ideal:1280}, height:{ideal:720}}
+}).then(stream=>{
+    video.srcObject = stream;
+});
+
+const pose = new Pose({
+    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+});
+pose.setOptions({
+    modelComplexity:1,
+    smoothLandmarks:true,
+    enableSegmentation:false,
+    smoothSegmentation:false
+});
+
+pose.onResults(results=>{
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.drawImage(results.image,0,0);
+    if(results.poseLandmarks){
+        drawConnectors(ctx, results.poseLandmarks, POSE_CONNECTIONS,{color:'#0f0',lineWidth:2});
+        drawLandmarks(ctx, results.poseLandmarks,{color:'#f33',lineWidth:1});
+        const lm = results.poseLandmarks;
+        function getAngle(a,b,c){
+            const ab = {x:a.x-b.x,y:a.y-b.y};
+            const cb = {x:c.x-b.x,y:a.y-b.y};
+            const dot = ab.x*cb.x + ab.y*cb.y;
+            const magA = Math.hypot(ab.x,ab.y);
+            const magC = Math.hypot(cb.x,cb.y);
+            let ang = Math.acos(dot/(magA*magC)) * 180 / Math.PI;
+            return ang;
+        }
+        const hipL = lm[23], hipR = lm[24];
+        const kneeL = lm[25], kneeR = lm[26];
+        const ankleL = lm[27], ankleR = lm[28];
+        const footL = lm[29], footR = lm[30];
+        const shoulderL = lm[11], shoulderR = lm[12];
+        const nose = lm[0];
+
+        const msgList = [];
+
+        const midHip = (hipL.x + hipR.x)/2;
+        if(kneeL.x > ankleL.x + 0.03) msgList.push("左膝内扣，膝盖向外撑");
+        if(kneeR.x < ankleR.x - 0.03) msgList.push("右膝内扣，膝盖向外撑");
+
+        const ankleAngleL = getAngle(kneeL, ankleL, footL);
+        const ankleAngleR = getAngle(kneeR, ankleR, footR);
+        if(ankleAngleL < 95) msgList.push("左脚足弓塌陷，轻轻提起足弓");
+        if(ankleAngleR < 95) msgList.push("右脚足弓塌陷，轻轻提起足弓");
+
+        if(kneeL.x < footL.x - 0.02) msgList.push("左膝超过脚尖，不要跪膝");
+        if(kneeR.x > footR.x + 0.02) msgList.push("右膝超过脚尖，不要跪膝");
+
+        if(shoulderL.y < hipL.y - 0.38) msgList.push("左肩耸起，沉肩");
+        if(shoulderR.y < hipR.y - 0.38) msgList.push("右肩耸起，沉肩");
+
+        const hipDiff = Math.abs(hipL.y - hipR.y);
+        if(hipDiff>0.04) msgList.push("骨盆歪斜，摆正胯部");
+
+        if(nose.y > shoulderL.y + 0.12) msgList.push("身体前倾，拔背立身");
+
+        let tipText = msgList.length>0 ? msgList.join("；") : "姿态良好，保持两仪桩";
+        tipBox.innerText = tipText;
+
+        if(tipText !== lastTipText){
+            synth.cancel();
+            const utt = new SpeechSynthesisUtterance(tipText);
+            synth.speak(utt);
+            lastTipText = tipText;
+        }
+    }else{
+        tipBox.innerText = "未识别到全身，请手机放侧面，完整摄入全身";
+    }
+});
+
+video.addEventListener('play',()=>{
+    async function loop(){
+        await pose.send({image:video});
+        requestAnimationFrame(loop);
+    }
+    loop();
+})
+</script>
+</body>
+</html>

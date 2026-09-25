@@ -1,0 +1,16 @@
+{
+  "name": "孟村八极两仪桩矫正",
+  "short_name": "两仪桩",
+  "description": "孟村八极两仪桩姿态识别与语音矫正",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#111111",
+  "theme_color": "#222222",
+  "icons": [
+    {
+      "src": "icon.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
