@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>两仪桩｜侧面姿态检测</title>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            background-color: #111;
+            color: white;
+            text-align: center;
+            overflow: hidden;
+        }
+        .title {
+            font-size: 24px;
+            color: red;
+            padding: 8px;
+            font-weight: bold;
+        }
+        .info-panel {
+            font-size: 18px;
+            padding: 6px;
+            color: #6cf;
+        }
+        video {
+            max-width: 100%;
+            max-height: 70vh;
+            transform: scaleX(-1);
+        }
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            transform: scaleX(-1);
+        }
+        .btn-wrap {
+            padding: 8px;
+        }
+        button {
+            font-size:18px;
+            padding: 8px 16px;
+        }
+    </style>
+</head>
+<body>
+    <div class="title">两仪桩【侧面版】</div>
+    <div class="info-panel" id="info">等待摄像头加载...</div>
+    <div class="btn-wrap">
+        <button id="switchCam">切换前/后置摄像头</button>
+    </div>
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="canvas"></canvas>
+
+    <script>
+        // ========== 工具函数 ==========
+        function distance(p1,p2){
+            return Math.hypot(p1.x-p2.x, p1.y-p2.y);
+        }
+        function calcAngle(a,b,c){
+            const ab = {x:a.x-b.x, y:a.y-b.y};
+            const cb = {x:c.x-b.x, y:c.y-b.y};
+            const dot = ab.x*cb.x + ab.y*cb.y;
+            const magA = Math.hypot(ab.x,ab.y);
+            const magC = Math.hypot(cb.x,cb.y);
+            const rad = Math.acos(dot/(magA*magC));
+            return rad * 180 / Math.PI;
+        }
+        function midPoint(p1,p2){
+            return {
+                x:(p1.x+p2.x)/2,
+                y:(p1.y+p2.y)/2
+            }
+        }
+        //语音播报 + 冷却防重复
+        let lastMsg = "";
+        let lastSpeakTime = 0;
+        function speak(text){
+            const u = new SpeechSynthesisUtterance(text);
+            u.lang = "zh-CN";
+            speechSynthesis.speak(u);
+        }
+        function checkSpeak(msg){
+            const now = Date.now();
+            if(msg === lastMsg && now - lastSpeakTime < 3000) return;
+            lastMsg = msg;
+            lastSpeakTime = now;
+            speak(msg);
+        }
+
+        // ========== 画布与视频 ==========
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const infoDom = document.getElementById('info');
+        let camMode = "user";
+
+        function resizeCanvas(){
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+        }
+
+        // ========== MediaPipe Pose 初始化 ==========
+        const pose = new Pose({
+            locateFile: (file) => {
+                return `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`;
+            }
+        });
+        pose.setOptions({
+            modelComplexity:1,
+            smoothLandmarks:true,
+            enableSegmentation:false,
+            smoothSegmentation:false,
+            minDetectionConfidence:0.5,
+            minTrackingConfidence:0.5
+        });
+        pose.onResults(onResults);
+
+        //摄像头
+        async function startCamera(mode){
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video:{facingMode:mode},
+                audio:false
+            });
+            video.srcObject = stream;
+            await video.play();
+            resizeCanvas();
+            sendFrame();
+        }
+        async function sendFrame(){
+            await pose.send({image:video});
+            requestAnimationFrame(sendFrame);
+        }
+        document.getElementById("switchCam").onclick = async ()=>{
+            camMode = camMode === "user" ? "environment" : "user";
+            await startCamera(camMode);
+        }
+
+        // ========== 核心姿态计算逻辑 ==========
+        function onResults(results){
+            ctx.clearRect(0,0,canvas.width,canvas.height);
+            if(!results.poseLandmarks){
+                infoDom.innerText = "未识别到人体";
+                return;
+            }
+            const lm = results.poseLandmarks;
+            //关键点
+            const nose = lm[0];
+            const ear = lm[7];
+            const shL = lm[11], shR = lm[12];
+            const hpL = lm[23], hpR = lm[24];
+            const knL = lm[25], knR = lm[26];
+            const anL = lm[27], anR = lm[28];
+
+            const shMid = midPoint(shL, shR);
+            const hpMid = midPoint(hpL, hpR);
+
+            //1 躯干倾角 肩中点 -> 髋中点
+            const spineAngle = calcAngle(
+                {x:shMid.x, y:0},
+                shMid,
+                hpMid
+            );
+            //2 探颈：耳朵相对肩膀
+            const neckOffset = ear.x - shL.x;
+            //3 左膝角度 髋-膝-踝
+            const kneeAngle = calcAngle(hpL, knL, anL);
+            //4 膝盖是否超过脚尖
+            const kneeForward = knL.x < anL.x - 0.03;
+            //5骨盆简易判断
+            const pelvisTilt = hpL.y - knL.y;
+
+            //绘制骨骼线
+            ctx.strokeStyle="#0f0";
+            ctx.lineWidth=3;
+            ctx.beginPath();
+            ctx.moveTo(shMid.x*canvas.width, shMid.y*canvas.height);
+            ctx.lineTo(hpMid.x*canvas.width, hpMid.y*canvas.height);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(hpL.x*canvas.width, hpL.y*canvas.height);
+            ctx.lineTo(knL.x*canvas.width, knL.y*canvas.height);
+            ctx.lineTo(anL.x*canvas.width, anL.y*canvas.height);
+            ctx.stroke();
+
+            //绘制所有关键点红点
+            const points = [ear,shL,shR,hpL,hpR,knL,knR,anL,anR];
+            ctx.fillStyle="#f22";
+            for(let p of points){
+                ctx.beginPath();
+                ctx.arc(p.x*canvas.width,p.y*canvas.height,5,0,Math.PI*2);
+                ctx.fill();
+            }
+
+            // ========== 判断规则，语音播报 ==========
+            let tips = [];
+            if(spineAngle > 5){
+                tips.push("身体前倾，向后收一点，脊柱竖直");
+            }else if(spineAngle < -5){
+                tips.push("身体后仰，微微向前领身");
+            }
+            if(neckOffset < -0.04){
+                tips.push("下颌微收，头不要往前探");
+            }else if(neckOffset > 0.04){
+                tips.push("头部不要后仰，头顶向上领起");
+            }
+            if(kneeAngle < 90){
+                tips.push("起身一点，不要蹲太低");
+            }
+            if(kneeForward){
+                tips.push("膝盖往后收，不要超过脚尖");
+            }
+            if(pelvisTilt < -0.06){
+                tips.push("尾闾下沉敛臀，不要塌腰");
+            }
+
+            infoDom.innerText = `躯干倾角:${spineAngle.toFixed(2)}° | 膝角:${kneeAngle.toFixed(2)}°`;
+            if(tips.length>0){
+                checkSpeak(tips[0]);
+            }
+        }
+
+        //启动
+        startCamera(camMode);
+    </script>
+</body>
+</html>
