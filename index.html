@@ -46,25 +46,40 @@ pose.setOptions({
 });
 pose.onResults(onResults);
 
+// 释放摄像头资源
+function stopCameraStream(){
+  if(stream){
+    stream.getTracks().forEach(track => {
+      track.stop();
+    });
+    stream = null;
+  }
+  video.srcObject = null;
+}
+
 // 启动摄像头
 async function startCamera(rearMode){
-  if(stream){
-    stream.getTracks().forEach(t=>t.stop());
+  stopCameraStream();
+  try{
+    const constraints = {
+      video:{ facingMode: rearMode ? "environment" : "user" }
+    };
+    stream = await navigator.mediaDevices.getUserMedia(constraints);
+    video.srcObject = stream;
+    await video.play();
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    tipBox.innerText="摄像头就绪，请站入画面，全身入镜";
+    sendFrame();
+  }catch(err){
+    tipBox.innerText="摄像头打开失败，请刷新页面，检查权限";
+    console.error(err);
   }
-  const constraints = {
-    video:{ facingMode: rearMode ? "environment" : "user" }
-  };
-  stream = await navigator.mediaDevices.getUserMedia(constraints);
-  video.srcObject = stream;
-  await video.play();
-  canvas.width = video.videoWidth;
-  canvas.height = video.videoHeight;
-  tipBox.innerText="摄像头就绪，请站入画面，全身入镜";
-  sendFrame();
 }
 
 // 循环送入画面给模型
 async function sendFrame(){
+  if(!stream) return;
   await pose.send({image:video});
   requestAnimationFrame(sendFrame);
 }
