@@ -1,0 +1,13 @@
+{
+  "background_color": "#111111",
+  "dir": "ltr",
+  "display": "standalone",
+  "name": "孟村八极两仪桩姿态矫正",
+  "orientation": "any",
+  "scope": "/",
+  "short_name": "两仪桩",
+  "start_url": "/liangyizhuang/",
+  "theme_color": "#222222",
+  "description": "摄像头实时监测两仪桩，语音提醒膝盖内扣、足弓塌陷等姿势问题",
+  "iarc_rating_id": "孟村八极两仪桩姿态矫正"
+}
