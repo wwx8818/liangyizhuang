@@ -1,8 +1,8 @@
 {
-  "name": "孟村八极两仪桩矫正",
+  "name": "孟村八极两仪桩姿态矫正",
   "short_name": "两仪桩",
-  "description": "孟村八极两仪桩姿态识别与语音矫正",
-  "start_url": "./index.html",
+  "description": "摄像头实时监测两仪桩，语音提醒膝盖内扣、足弓塌陷等姿势问题",
+  "start_url": "/liangyizhuang/",
   "display": "standalone",
   "background_color": "#111111",
   "theme_color": "#222222",
