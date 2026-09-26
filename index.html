@@ -1,20 +1,23 @@
 <!DOCTYPE html>
-<html>
+<html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>孟村八极 两仪桩姿态矫正</title>
+<title>孟村八极两仪桩姿态矫正</title>
 <link rel="manifest" href="manifest.json">
 <style>
 *{margin:0;padding:0;box-sizing:border-box;}
 body{background:#111;color:#fff;display:flex;flex-direction:column;align-items:center;min-height:100vh;}
-canvas{max-width:100vw;height:auto;}
+#video{display:none;}
+#canvas{max-width:100%;height:auto;}
 #tip{font-size:18px;padding:12px;color:#ff4444;text-align:center;min-height:60px;line-height:1.5;}
+#btnSwitch{margin:10px;padding:8px 16px;font-size:16px;}
 </style>
 </head>
 <body>
 <div id="tip">等待摄像头加载...</div>
-<video id="video" autoplay playsinline style="display:none"></video>
+<button id="btnSwitch">切换前/后置摄像头</button>
+<video id="video" autoplay playsinline></video>
 <canvas id="canvas"></canvas>
 
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
@@ -24,93 +27,117 @@ const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 const video = document.getElementById('video');
 const tipBox = document.getElementById('tip');
-let lastTipText = "";
-const synth = window.speechSynthesis;
+const btnSwitch = document.getElementById('btnSwitch');
 
-navigator.mediaDevices.getUserMedia({
-    video:{facingMode:"environment", width:{ideal:1280}, height:{ideal:720}}
-}).then(stream=>{
-    video.srcObject = stream;
-});
+let stream = null;
+let useRearCam = true; // 默认后置摄像头
+let lastSpeakTime = 0;
+const speakInterval = 2500; //语音防刷屏
 
+// 初始化姿态模型
 const pose = new Pose({
-    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+  locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
 });
 pose.setOptions({
-    modelComplexity:1,
-    smoothLandmarks:true,
-    enableSegmentation:false,
-    smoothSegmentation:false
+  modelComplexity:1,
+  smoothLandmarks:true,
+  enableSegmentation:false,
+  smoothSegmentation:false
 });
+pose.onResults(onResults);
 
-pose.onResults(results=>{
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    ctx.clearRect(0,0,canvas.width,canvas.height);
-    ctx.drawImage(results.image,0,0);
-    if(results.poseLandmarks){
-        drawConnectors(ctx, results.poseLandmarks, POSE_CONNECTIONS,{color:'#0f0',lineWidth:2});
-        drawLandmarks(ctx, results.poseLandmarks,{color:'#f33',lineWidth:1});
-        const lm = results.poseLandmarks;
-        function getAngle(a,b,c){
-            const ab = {x:a.x-b.x,y:a.y-b.y};
-            const cb = {x:c.x-b.x,y:a.y-b.y};
-            const dot = ab.x*cb.x + ab.y*cb.y;
-            const magA = Math.hypot(ab.x,ab.y);
-            const magC = Math.hypot(cb.x,cb.y);
-            let ang = Math.acos(dot/(magA*magC)) * 180 / Math.PI;
-            return ang;
-        }
-        const hipL = lm[23], hipR = lm[24];
-        const kneeL = lm[25], kneeR = lm[26];
-        const ankleL = lm[27], ankleR = lm[28];
-        const footL = lm[29], footR = lm[30];
-        const shoulderL = lm[11], shoulderR = lm[12];
-        const nose = lm[0];
+// 启动摄像头
+async function startCamera(rearMode){
+  if(stream){
+    stream.getTracks().forEach(t=>t.stop());
+  }
+  const constraints = {
+    video:{ facingMode: rearMode ? "environment" : "user" }
+  };
+  stream = await navigator.mediaDevices.getUserMedia(constraints);
+  video.srcObject = stream;
+  await video.play();
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  tipBox.innerText="摄像头就绪，请站入画面，全身入镜";
+  sendFrame();
+}
 
-        const msgList = [];
+// 循环送入画面给模型
+async function sendFrame(){
+  await pose.send({image:video});
+  requestAnimationFrame(sendFrame);
+}
 
-        const midHip = (hipL.x + hipR.x)/2;
-        if(kneeL.x > ankleL.x + 0.03) msgList.push("左膝内扣，膝盖向外撑");
-        if(kneeR.x < ankleR.x - 0.03) msgList.push("右膝内扣，膝盖向外撑");
+// 姿态结果处理
+function onResults(results){
+  ctx.save();
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.drawImage(results.image,0,0,canvas.width,canvas.height);
 
-        const ankleAngleL = getAngle(kneeL, ankleL, footL);
-        const ankleAngleR = getAngle(kneeR, ankleR, footR);
-        if(ankleAngleL < 95) msgList.push("左脚足弓塌陷，轻轻提起足弓");
-        if(ankleAngleR < 95) msgList.push("右脚足弓塌陷，轻轻提起足弓");
+  if(results.poseLandmarks){
+    // 只保留躯干下肢关键点，忽略人脸
+    const landmarks = results.poseLandmarks;
+    const leftHip = landmarks[23];
+    const rightHip = landmarks[24];
+    const leftKnee = landmarks[25];
+    const rightKnee = landmarks[26];
+    const leftAnkle = landmarks[27];
+    const rightAnkle = landmarks[28];
+    const leftShoulder = landmarks[11];
+    const rightShoulder = landmarks[12];
 
-        if(kneeL.x < footL.x - 0.02) msgList.push("左膝超过脚尖，不要跪膝");
-        if(kneeR.x > footR.x + 0.02) msgList.push("右膝超过脚尖，不要跪膝");
+    // 绘制骨架（不画人脸）
+    drawConnectors(ctx, landmarks, POSE_CONNECTIONS, {color:'#00ff00',lineWidth:2});
+    drawLandmarks(ctx, [leftHip,rightHip,leftKnee,rightKnee,leftAnkle,rightAnkle,leftShoulder,rightShoulder],{color:'#ff0000',lineWidth:1});
 
-        if(shoulderL.y < hipL.y - 0.38) msgList.push("左肩耸起，沉肩");
-        if(shoulderR.y < hipR.y - 0.38) msgList.push("右肩耸起，沉肩");
+    let warnText = "";
+    const now = Date.now();
 
-        const hipDiff = Math.abs(hipL.y - hipR.y);
-        if(hipDiff>0.04) msgList.push("骨盆歪斜，摆正胯部");
+    // 1.膝盖内扣判断：膝盖X坐标超过脚踝
+    if(leftKnee.x > leftAnkle.x + 0.04) warnText += "左膝内扣！";
+    if(rightKnee.x < rightAnkle.x - 0.04) warnText += "右膝内扣！";
 
-        if(nose.y > shoulderL.y + 0.12) msgList.push("身体前倾，拔背立身");
+    // 2.足弓塌陷：脚踝过度下压，y偏移过大
+    if(leftAnkle.y > leftKnee.y + 0.22) warnText += "左脚足弓塌陷！";
+    if(rightAnkle.y > rightKnee.y + 0.22) warnText += "右脚足弓塌陷！";
 
-        let tipText = msgList.length>0 ? msgList.join("；") : "姿态良好，保持两仪桩";
-        tipBox.innerText = tipText;
+    //3.胯不平
+    const hipDiff = Math.abs(leftHip.y - rightHip.y);
+    if(hipDiff>0.05) warnText += "胯高低不平！";
 
-        if(tipText !== lastTipText){
-            synth.cancel();
-            const utt = new SpeechSynthesisUtterance(tipText);
-            synth.speak(utt);
-            lastTipText = tipText;
-        }
+    //4.含胸：肩膀过于前探
+    const shoulderForward = (leftShoulder.x + rightShoulder.x)/2 - (leftHip.x + rightHip.x)/2;
+    if(shoulderForward < -0.07) warnText += "含胸，注意拔背！";
+
+    if(warnText){
+      tipBox.innerText = warnText;
+      if(now - lastSpeakTime > speakInterval){
+        window.speechSynthesis.cancel();
+        const utter = new SpeechSynthesisUtterance(warnText);
+        window.speechSynthesis.speak(utter);
+        lastSpeakTime = now;
+      }
     }else{
-        tipBox.innerText = "未识别到全身，请手机放侧面，完整摄入全身";
+      tipBox.innerText="姿势合格，保持两仪桩";
     }
-});
+  }else{
+    tipBox.innerText="未识别到全身，请后退，完整全身入镜";
+  }
+  ctx.restore();
+}
 
-video.addEventListener('play',()=>{
-    async function loop(){
-        await pose.send({image:video});
-        requestAnimationFrame(loop);
-    }
-    loop();
-})
+//切换摄像头按钮
+btnSwitch.onclick = async ()=>{
+  useRearCam = !useRearCam;
+  await startCamera(useRearCam);
+}
+
+//页面加载完成启动后置
+startCamera(useRearCam).catch(err=>{
+  tipBox.innerText="摄像头权限被拒绝，请在浏览器设置允许摄像头";
+  console.error(err);
+});
 </script>
 </body>
 </html>
