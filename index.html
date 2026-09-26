@@ -3,19 +3,21 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>孟村八极两仪桩姿态矫正</title>
+<title>孟村八极两仪桩姿态矫正（重点监测胯）</title>
 <link rel="manifest" href="manifest.json">
 <style>
 *{margin:0;padding:0;box-sizing:border-box;}
 body{background:#111;color:#fff;display:flex;flex-direction:column;align-items:center;min-height:100vh;}
 #video{display:none;}
 #canvas{max-width:100%;height:auto;}
-#tip{font-size:18px;padding:12px;color:#ff4444;text-align:center;min-height:60px;line-height:1.5;}
-#btnSwitch{margin:10px;padding:8px 16px;font-size:16px;}
+#tip{font-size:28px;padding:12px;color:#ff4444;text-align:center;min-height:90px;line-height:1.4;font-weight:bold;}
+#info{font-size:24px;color:#8cf;padding:6px;font-weight:bold;}
+#btnSwitch{margin:10px;padding:12px 20px;font-size:20px;}
 </style>
 </head>
 <body>
 <div id="tip">等待摄像头加载...</div>
+<div id="info">胯差值：--</div>
 <button id="btnSwitch">切换前/后置摄像头</button>
 <video id="video" autoplay playsinline></video>
 <canvas id="canvas"></canvas>
@@ -27,14 +29,14 @@ const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 const video = document.getElementById('video');
 const tipBox = document.getElementById('tip');
+const infoBox = document.getElementById('info');
 const btnSwitch = document.getElementById('btnSwitch');
 
 let stream = null;
-let useRearCam = true; // 默认后置摄像头
+let useRearCam = true;
 let lastSpeakTime = 0;
-const speakInterval = 2500; //语音防刷屏
+const speakInterval = 2800;
 
-// 初始化姿态模型
 const pose = new Pose({
   locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
 });
@@ -46,7 +48,6 @@ pose.setOptions({
 });
 pose.onResults(onResults);
 
-// 释放摄像头资源
 function stopCameraStream(){
   if(stream){
     stream.getTracks().forEach(track => {
@@ -57,7 +58,6 @@ function stopCameraStream(){
   video.srcObject = null;
 }
 
-// 启动摄像头
 async function startCamera(rearMode){
   stopCameraStream();
   try{
@@ -69,7 +69,7 @@ async function startCamera(rearMode){
     await video.play();
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
-    tipBox.innerText="摄像头就绪，请站入画面，全身入镜";
+    tipBox.innerText="摄像头就绪，正对镜头，重点观察胯部标记点";
     sendFrame();
   }catch(err){
     tipBox.innerText="摄像头打开失败，请刷新页面，检查权限";
@@ -77,53 +77,76 @@ async function startCamera(rearMode){
   }
 }
 
-// 循环送入画面给模型
 async function sendFrame(){
   if(!stream) return;
   await pose.send({image:video});
   requestAnimationFrame(sendFrame);
 }
 
-// 姿态结果处理
+//向量夹角计算
+function getAngle(p1,p2,p3){
+  const v1x = p1.x - p2.x;
+  const v1y = p1.y - p2.y;
+  const v2x = p3.x - p2.x;
+  const v2y = p3.y - p2.y;
+  const dot = v1x*v2x + v1y*v2y;
+  const mag1 = Math.sqrt(v1x*v1x + v1y*v1y);
+  const mag2 = Math.sqrt(v2x*v2x + v2y*v2y);
+  const cosA = Math.max(-1,Math.min(1,dot/(mag1*mag2)));
+  return Math.acos(cosA)*180/Math.PI;
+}
+
 function onResults(results){
   ctx.save();
   ctx.clearRect(0,0,canvas.width,canvas.height);
   ctx.drawImage(results.image,0,0,canvas.width,canvas.height);
 
   if(results.poseLandmarks){
-    // 只保留躯干下肢关键点，忽略人脸
-    const landmarks = results.poseLandmarks;
-    const leftHip = landmarks[23];
-    const rightHip = landmarks[24];
-    const leftKnee = landmarks[25];
-    const rightKnee = landmarks[26];
-    const leftAnkle = landmarks[27];
-    const rightAnkle = landmarks[28];
-    const leftShoulder = landmarks[11];
-    const rightShoulder = landmarks[12];
+    const lm = results.poseLandmarks;
+    const lHip = lm[23], rHip = lm[24];
+    const lKnee = lm[25], rKnee = lm[26];
+    const lAnkle = lm[27], rAnkle = lm[28];
+    const lShoulder = lm[11], rShoulder = lm[12];
 
-    // 绘制骨架（不画人脸）
-    drawConnectors(ctx, landmarks, POSE_CONNECTIONS, {color:'#00ff00',lineWidth:2});
-    drawLandmarks(ctx, [leftHip,rightHip,leftKnee,rightKnee,leftAnkle,rightAnkle,leftShoulder,rightShoulder],{color:'#ff0000',lineWidth:1});
+    // 绘制骨架
+    drawConnectors(ctx, lm, POSE_CONNECTIONS, {color:'#00ff00',lineWidth:2});
+    // 胯点超大红色圆点突出
+    drawLandmarks(ctx, [lHip,rHip],{color:'#ff2222',lineWidth:4,radius:8});
+    drawLandmarks(ctx, [lKnee,rKnee,lAnkle,rAnkle,lShoulder,rShoulder],{color:'#ffaa00',lineWidth:1,radius:4});
 
     let warnText = "";
     const now = Date.now();
 
-    // 1.膝盖内扣判断：膝盖X坐标超过脚踝
-    if(leftKnee.x > leftAnkle.x + 0.04) warnText += "左膝内扣！";
-    if(rightKnee.x < rightAnkle.x - 0.04) warnText += "右膝内扣！";
+    // ========== 胯部判断优先 ==========
+    const hipDiff = Math.abs(lHip.y - rHip.y);
+    infoBox.innerText = `胯高度差值：${hipDiff.toFixed(3)}`;
+    // 胯不平
+    if(hipDiff>0.05){
+      warnText += "胯高低不平！";
+    }
+    // 臀部后撅，尾闾不正
+    const hipCenterX = (lHip.x + rHip.x)/2;
+    const shoulderCenterX = (lShoulder.x + rShoulder.x)/2;
+    if(hipCenterX > shoulderCenterX + 0.07){
+      warnText += "臀部后撅，尾闾中正！";
+    }
 
-    // 2.足弓塌陷：脚踝过度下压，y偏移过大
-    if(leftAnkle.y > leftKnee.y + 0.22) warnText += "左脚足弓塌陷！";
-    if(rightAnkle.y > rightKnee.y + 0.22) warnText += "右脚足弓塌陷！";
-
-    //3.胯不平
-    const hipDiff = Math.abs(leftHip.y - rightHip.y);
-    if(hipDiff>0.05) warnText += "胯高低不平！";
-
-    //4.含胸：肩膀过于前探
-    const shoulderForward = (leftShoulder.x + rightShoulder.x)/2 - (leftHip.x + rightHip.x)/2;
-    if(shoulderForward < -0.07) warnText += "含胸，注意拔背！";
+    // ========== 其余判断放后面 ==========
+    //膝盖内扣
+    if(lKnee.x > lAnkle.x + 0.06) warnText += "左膝内扣！";
+    if(rKnee.x < rAnkle.x - 0.06) warnText += "右膝内扣！";
+    //足弓塌陷
+    const leftCalfAngle = getAngle(lHip,lKnee,lAnkle);
+    const rightCalfAngle = getAngle(rHip,rKnee,rAnkle);
+    if(leftCalfAngle < 100) warnText += "左脚足弓塌陷！";
+    if(rightCalfAngle < 100) warnText += "右脚足弓塌陷！";
+    //含胸拔背
+    const shoulderForward = (lShoulder.x + rShoulder.x)/2 - (lHip.x + rHip.x)/2;
+    if(shoulderForward < -0.08) warnText += "含胸，注意拔背！";
+    //桩架过低
+    const hipHeight = (lHip.y + rHip.y)/2;
+    const ankleHeight = (lAnkle.y + rAnkle.y)/2;
+    if(hipHeight > ankleHeight - 0.05) warnText += "桩架过低，抬高重心！";
 
     if(warnText){
       tipBox.innerText = warnText;
@@ -134,21 +157,20 @@ function onResults(results){
         lastSpeakTime = now;
       }
     }else{
-      tipBox.innerText="姿势合格，保持两仪桩";
+      tipBox.innerText="胯部中正，姿势合格，保持两仪桩";
     }
   }else{
-    tipBox.innerText="未识别到全身，请后退，完整全身入镜";
+    tipBox.innerText="未识别到全身，请后退一点，全身入镜";
+    infoBox.innerText="胯差值：--";
   }
   ctx.restore();
 }
 
-//切换摄像头按钮
 btnSwitch.onclick = async ()=>{
   useRearCam = !useRearCam;
   await startCamera(useRearCam);
 }
 
-//页面加载完成启动后置
 startCamera(useRearCam).catch(err=>{
   tipBox.innerText="摄像头权限被拒绝，请在浏览器设置允许摄像头";
   console.error(err);
